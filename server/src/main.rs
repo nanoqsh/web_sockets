@@ -1,13 +1,15 @@
-use core::{decode, Message};
-use futures::{Stream, StreamExt, TryStreamExt};
-use std::io;
-use tokio::net::{TcpListener, ToSocketAddrs};
-use tokio_tungstenite::{accept_async, tungstenite as ws};
+mod chat;
 
-#[derive(Debug)]
-struct User {
-    name: String,
-}
+use crate::chat::{ChatMessage, User};
+use core::{decode, Message};
+use futures::TryStreamExt;
+use std::io;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::{TcpListener, ToSocketAddrs},
+    sync::broadcast::{self, Sender},
+};
+use tokio_tungstenite::{accept_async, tungstenite as ws};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -24,64 +26,63 @@ where
         listener.local_addr().unwrap()
     );
 
+    let (sender, mut receiver) = broadcast::channel(16);
+
     loop {
-        let (stream, addr) = listener.accept().await?;
-        println!("New request at {addr}");
-
-        let mut ws_stream = match accept_async(stream).await {
-            Ok(ws_stream) => ws_stream,
-            Err(err) => {
-                println!("WebSocket handshake failed at {addr} with error: {err}");
-                continue;
+        tokio::select! {
+            result = receiver.recv() => {
+                match result {
+                    Ok(ChatMessage { from, text }) => println!("{from}: {text}"),
+                    Err(_) => break Ok(()),
+                }
             }
-        };
+            result = listener.accept() => {
+                let (stream, addr) = result?;
+                println!("New request at {addr}");
 
-        tokio::spawn(async move {
-            match process(&mut ws_stream).await {
-                Ok(()) => println!("Connection at {addr} lost"),
-                Err(err) => eprintln!("Error at {addr}: {:?}", err),
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    match process(stream, sender).await {
+                        Ok(()) => println!("Connection at {addr} lost"),
+                        Err(err) => eprintln!("Error at {addr}: {:?}", err),
+                    }
+                });
             }
-        });
+        }
     }
 }
 
-async fn process<S>(stream: &mut S) -> ws::Result<()>
+async fn process<S>(stream: S, sender: Sender<ChatMessage>) -> ws::Result<()>
 where
-    S: Stream<Item = ws::Result<ws::Message>> + Unpin,
+    S: AsyncRead + AsyncWrite,
 {
-    let stream = stream.try_filter_map(|message| async {
-        match message {
-            ws::Message::Text(text) => Ok(Some(Message::Text(text))),
-            ws::Message::Binary(buf) => Ok(Some(decode(&buf).unwrap())),
+    futures::pin_mut!(stream);
+    let mut stream = accept_async(stream).await?;
+    let mut user = User::new(sender);
+
+    while let Some(message) = stream.try_next().await? {
+        let message = match message {
+            ws::Message::Text(text) => Message::Text(text),
+            ws::Message::Binary(buf) => match decode(&buf) {
+                Ok(message) => message,
+                Err(_) => break,
+            },
             ws::Message::Ping(_) => {
                 println!("ping");
-                Ok(None)
+                continue;
             }
             ws::Message::Pong(_) => {
                 println!("pong");
-                Ok(None)
+                continue;
             }
             ws::Message::Close(_) => {
-                print!("Closed. ");
-                Err(ws::Error::AlreadyClosed)
+                println!("close");
+                break;
             }
             _ => unreachable!(),
-        }
-    });
+        };
 
-    futures::pin_mut!(stream);
-    process_messages(stream).await
-}
-
-async fn process_messages<S>(mut stream: S) -> ws::Result<()>
-where
-    S: Stream<Item = ws::Result<Message>> + Unpin,
-{
-    while let Some(item) = stream.next().await {
-        match item? {
-            Message::Auth { name } => println!("Auth as {name}"),
-            Message::Text(text) => println!("USER: {text}"),
-        }
+        user.got(message);
     }
 
     Ok(())

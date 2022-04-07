@@ -1,3 +1,4 @@
+use core::{encode, Message};
 use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::{BinaryType, ErrorEvent, MessageEvent, WebSocket};
 
@@ -19,13 +20,14 @@ pub fn main() -> Result<(), JsValue> {
         let ws = ws.clone();
         move |_| {
             log("socket opened");
-            match ws.send_with_str("ПИНГ НАХУЙ") {
-                Ok(_) => log("message successfully sent"),
-                Err(e) => {
-                    log("error sending message");
-                    log_value(&e);
-                }
-            }
+            send(
+                &ws,
+                Message::Auth {
+                    name: "nano".into(),
+                },
+            );
+            send(&ws, Message::Text("hello".into()));
+            send(&ws, Message::Text("sup!".into()));
         }
     }) as Box<dyn FnMut(JsValue)>);
     ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
@@ -60,4 +62,17 @@ pub fn main() -> Result<(), JsValue> {
     }
 
     Ok(())
+}
+
+fn send(ws: &WebSocket, message: Message) {
+    let mut buf = Vec::new();
+    encode(&message, &mut buf).unwrap();
+
+    match ws.send_with_u8_array(&buf) {
+        Ok(_) => log("message successfully sent"),
+        Err(e) => {
+            log("error sending message");
+            log_value(&e);
+        }
+    }
 }

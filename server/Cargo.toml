@@ -16,5 +16,6 @@ features = [
     "net",
     "rt",
     "rt-multi-thread",
+    "sync",
     "time",
 ]
