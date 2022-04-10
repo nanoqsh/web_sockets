@@ -1,5 +1,5 @@
-use crate::{log, log_value};
 use core::{decode, encode, Message};
+use gloo::console::log;
 use std::cell::RefCell;
 use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::{BinaryType, ErrorEvent, MessageEvent, WebSocket};
@@ -17,21 +17,21 @@ impl Socket {
         ws.set_binary_type(BinaryType::Arraybuffer);
 
         let onopen_callback = Closure::wrap(Box::new(move |_| {
-            log("socket opened");
+            log!("socket opened");
         }) as Box<dyn FnMut(JsValue)>);
         ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
         onopen_callback.forget();
 
         let onerror_callback = Closure::wrap(Box::new(move |ev: ErrorEvent| {
-            log("an error occurred");
-            log_value(&ev);
-            log_value(&ev.error());
+            log!("an error occurred");
+            log!(&ev);
+            log!(&ev.error());
         }) as Box<dyn FnMut(ErrorEvent)>);
         ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
         onerror_callback.forget();
 
         let onmessage_callback = Closure::wrap(Box::new(move |ev: MessageEvent| {
-            log("a message received");
+            log!("a message received");
 
             let message = match ev.data().dyn_into::<js_sys::ArrayBuffer>() {
                 Ok(array) => {
@@ -59,7 +59,9 @@ impl Socket {
     }
 
     pub fn send(&self, message: &Message) {
-        if self.ws.ready_state() != 1 {
+        const OPEN: u16 = 1;
+
+        if self.ws.ready_state() != OPEN {
             return;
         }
 
@@ -67,10 +69,10 @@ impl Socket {
         encode(message, &mut buf).unwrap();
 
         match self.ws.send_with_u8_array(&buf) {
-            Ok(_) => log("message successfully sent"),
+            Ok(_) => log!("message successfully sent"),
             Err(e) => {
-                log("error sending message");
-                log_value(&e);
+                log!("error sending message");
+                log!(e);
             }
         }
     }
@@ -85,7 +87,7 @@ impl Socket {
 impl Drop for Socket {
     fn drop(&mut self) {
         if let Err(err) = self.ws.close() {
-            log_value(&err);
+            log!(err);
         }
     }
 }
@@ -95,7 +97,7 @@ thread_local! {
         match Socket::new("ws://127.0.0.1:6789") {
             Ok(sock) => sock,
             Err(err) => {
-                log_value(&err);
+                log!(err);
                 panic!("received an error while starting a socket");
             }
         }

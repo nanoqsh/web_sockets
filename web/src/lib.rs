@@ -3,18 +3,9 @@ mod socket;
 use crate::socket::SOCK;
 use core::Message;
 use std::rc::Rc;
-use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen::prelude::*;
 use web_sys::{Document, HtmlInputElement};
 use yew::prelude::*;
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    pub fn log(s: &str);
-
-    #[wasm_bindgen(js_namespace = console, js_name = log)]
-    pub fn log_value(s: &wasm_bindgen::JsValue);
-}
 
 #[wasm_bindgen(start)]
 pub fn main() {
@@ -77,30 +68,25 @@ fn chat(_: &ChatProps) -> Html {
         }));
     });
 
-    let onclick = Callback::from(move |_| {
-        let form = document().get_element_by_id("send_form").unwrap();
-        let input = match form.query_selector("input[name='text']") {
-            Ok(input) => input.unwrap(),
-            Err(err) => {
-                log_value(&err);
-                return;
+    let text_node = NodeRef::default();
+    let onclick = Callback::from({
+        let text_node = text_node.clone();
+        move |_| {
+            if let Some(input) = text_node.cast::<HtmlInputElement>() {
+                let text = input.value();
+                input.set_value("");
+                let text = text.trim();
+
+                if text.is_empty() {
+                    return;
+                }
+
+                let message = Message::Text {
+                    from: String::new(),
+                    text: text.into(),
+                };
+                SOCK.with(|sock| sock.send(&message));
             }
-        };
-
-        if let Some(input) = input.dyn_ref::<HtmlInputElement>() {
-            let text = input.value();
-            input.set_value("");
-            let text = text.trim();
-
-            if text.is_empty() {
-                return;
-            }
-
-            let message = Message::Text {
-                from: String::new(),
-                text: text.into(),
-            };
-            SOCK.with(|sock| sock.send(&message));
         }
     });
 
@@ -116,7 +102,7 @@ fn chat(_: &ChatProps) -> Html {
                 })
             }
             <div id="send_form">
-                <input type="text" name="text" />
+                <input ref={ text_node } type="text" name="text" />
                 <button { onclick }>{ "Send" }</button>
             </div>
         </div>
@@ -150,34 +136,29 @@ fn auth(props: &AuthProps) -> Html {
     // Initialize the socket
     SOCK.with(|_| {});
 
+    let text_node = NodeRef::default();
     let onauth = props.onauth.clone();
-    let onclick = Callback::from(move |_| {
-        let form = document().get_element_by_id("auth_form").unwrap();
-        let input = match form.query_selector("input[name='name']") {
-            Ok(input) => input.unwrap(),
-            Err(err) => {
-                log_value(&err);
-                return;
+    let onclick = Callback::from({
+        let text_node = text_node.clone();
+        move |_| {
+            if let Some(input) = text_node.cast::<HtmlInputElement>() {
+                let name = input.value();
+                let name = name.trim();
+
+                if name.is_empty() {
+                    return;
+                }
+
+                let message = Message::Auth { name: name.into() };
+                SOCK.with(|sock| sock.send(&message));
+                onauth.emit(name.into());
             }
-        };
-
-        if let Some(input) = input.dyn_ref::<HtmlInputElement>() {
-            let name = input.value();
-            let name = name.trim();
-
-            if name.is_empty() {
-                return;
-            }
-
-            let message = Message::Auth { name: name.into() };
-            SOCK.with(|sock| sock.send(&message));
-            onauth.emit(name.into());
         }
     });
 
     html! {
         <div id="auth_form">
-            <input type="text" name="name" />
+            <input ref={ text_node } type="text" name="name" />
             <button { onclick }>{ "Auth" }</button>
         </div>
     }
