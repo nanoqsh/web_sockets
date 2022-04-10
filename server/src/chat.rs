@@ -23,7 +23,7 @@ impl User {
                 Some(name) => println!("My name is {name} already."),
                 None => self.name = Some(name),
             },
-            Message::Text(text) => match &self.name {
+            Message::Text { text, .. } => match &self.name {
                 Some(name) => {
                     self.sender
                         .send(ChatMessage {

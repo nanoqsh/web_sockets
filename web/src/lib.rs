@@ -1,116 +1,19 @@
-use core::{decode, encode, Message};
-use std::{cell::RefCell, rc::Rc};
+mod socket;
+
+use crate::socket::SOCK;
+use core::Message;
+use std::rc::Rc;
 use wasm_bindgen::{prelude::*, JsCast};
-use web_sys::{BinaryType, Document, ErrorEvent, HtmlInputElement, MessageEvent, WebSocket};
-use yew::{function_component, html, use_state, Callback, Properties};
-
-type OnMessage = Box<dyn FnMut(Message)>;
-
-struct Socket {
-    ws: WebSocket,
-    on_message: RefCell<Option<OnMessage>>,
-}
-
-impl Socket {
-    fn new(url: &str) -> Result<Self, JsValue> {
-        let ws = WebSocket::new(url)?;
-        ws.set_binary_type(BinaryType::Arraybuffer);
-
-        let onopen_callback = Closure::wrap(Box::new(move |_| {
-            log("socket opened");
-        }) as Box<dyn FnMut(JsValue)>);
-        ws.set_onopen(Some(onopen_callback.as_ref().unchecked_ref()));
-        onopen_callback.forget();
-
-        let onerror_callback = Closure::wrap(Box::new(move |ev: ErrorEvent| {
-            log("an error occurred");
-            log_value(&ev);
-            log_value(&ev.error());
-        }) as Box<dyn FnMut(ErrorEvent)>);
-        ws.set_onerror(Some(onerror_callback.as_ref().unchecked_ref()));
-        onerror_callback.forget();
-
-        let onmessage_callback = Closure::wrap(Box::new(move |ev: MessageEvent| {
-            log("a message received");
-
-            let message = match ev.data().dyn_into::<js_sys::Uint8Array>() {
-                Ok(array) => {
-                    log("Uint8Array");
-                    let vec = array.to_vec();
-                    decode(&vec).unwrap()
-                }
-                _ => return,
-            };
-
-            SOCK.with(|sock| {
-                let mut on_message = sock.on_message.borrow_mut();
-                if let Some(callback) = on_message.as_mut() {
-                    callback(message)
-                }
-            })
-        }) as Box<dyn FnMut(MessageEvent)>);
-        ws.set_onmessage(Some(onmessage_callback.as_ref().unchecked_ref()));
-        onmessage_callback.forget();
-
-        Ok(Self {
-            ws,
-            on_message: RefCell::new(None),
-        })
-    }
-
-    fn send(&self, message: Message) {
-        if self.ws.ready_state() != 1 {
-            return;
-        }
-
-        let mut buf = Vec::new();
-        encode(&message, &mut buf).unwrap();
-
-        match self.ws.send_with_u8_array(&buf) {
-            Ok(_) => log("message successfully sent"),
-            Err(e) => {
-                log("error sending message");
-                log_value(&e);
-            }
-        }
-    }
-
-    fn on_message<F>(&self, f: F)
-    where
-        F: Into<OnMessage>,
-    {
-        let mut on_message = self.on_message.borrow_mut();
-        *on_message = Some(f.into());
-    }
-}
-
-impl Drop for Socket {
-    fn drop(&mut self) {
-        if let Err(err) = self.ws.close() {
-            log_value(&err);
-        }
-    }
-}
-
-thread_local! {
-    static SOCK: Socket = {
-        match Socket::new("ws://127.0.0.1:6789") {
-            Ok(sock) => sock,
-            Err(err) => {
-                log_value(&err);
-                panic!("received an error while starting a socket");
-            }
-        }
-    };
-}
+use web_sys::{Document, HtmlInputElement};
+use yew::prelude::*;
 
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
+    pub fn log(s: &str);
 
     #[wasm_bindgen(js_namespace = console, js_name = log)]
-    fn log_value(s: &wasm_bindgen::JsValue);
+    pub fn log_value(s: &wasm_bindgen::JsValue);
 }
 
 #[wasm_bindgen(start)]
@@ -160,12 +63,79 @@ struct ChatProps {
 }
 
 #[function_component(Chat)]
-fn chat(ChatProps { name }: &ChatProps) -> Html {
+fn chat(_: &ChatProps) -> Html {
+    let update = use_state(|| ());
+    let messages = use_mut_ref(Vec::new);
+
+    SOCK.with(|sock| {
+        let messages = messages.clone();
+        sock.on_message(Box::new(move |message| {
+            if let Message::Text { from, text } = message {
+                messages.borrow_mut().push((from, text));
+                update.set(());
+            }
+        }));
+    });
+
+    let onclick = Callback::from(move |_| {
+        let form = document().get_element_by_id("send_form").unwrap();
+        let input = match form.query_selector("input[name='text']") {
+            Ok(input) => input.unwrap(),
+            Err(err) => {
+                log_value(&err);
+                return;
+            }
+        };
+
+        if let Some(input) = input.dyn_ref::<HtmlInputElement>() {
+            let text = input.value();
+            input.set_value("");
+            let text = text.trim();
+
+            if text.is_empty() {
+                return;
+            }
+
+            let message = Message::Text {
+                from: String::new(),
+                text: text.into(),
+            };
+            SOCK.with(|sock| sock.send(&message));
+        }
+    });
+
     html! {
         <div>
-            { "Hi, " }
-            <strong>{ name }</strong>
-            { "!" }
+            {
+                for messages.borrow().iter().enumerate().map(|(key, (from, text))| html! {
+                    <ChatMessage
+                        { key }
+                        from={ from.to_string() }
+                        text={ text.to_string() }
+                    />
+                })
+            }
+            <div id="send_form">
+                <input type="text" name="text" />
+                <button { onclick }>{ "Send" }</button>
+            </div>
+        </div>
+    }
+}
+
+#[derive(Clone, PartialEq, Properties)]
+struct MessageProps {
+    from: String,
+    text: String,
+}
+
+#[function_component(ChatMessage)]
+fn chat_message(MessageProps { from, text }: &MessageProps) -> Html {
+    html! {
+        <div class="chat_message">
+            <strong>{ from }</strong>
+            { ":" }
+            <p>{ text }</p>
         </div>
     }
 }
@@ -199,8 +169,9 @@ fn auth(props: &AuthProps) -> Html {
                 return;
             }
 
-            SOCK.with(|sock| sock.send(Message::Auth { name: name.into() }));
-            onauth.emit(name.into())
+            let message = Message::Auth { name: name.into() };
+            SOCK.with(|sock| sock.send(&message));
+            onauth.emit(name.into());
         }
     });
 

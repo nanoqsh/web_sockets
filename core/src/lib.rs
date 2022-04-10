@@ -6,5 +6,5 @@ use bincode::{Decode, Encode};
 #[derive(Decode, Encode)]
 pub enum Message {
     Auth { name: String },
-    Text(String),
+    Text { from: String, text: String },
 }

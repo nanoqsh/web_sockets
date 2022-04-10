@@ -48,3 +48,8 @@ body {
     margin: 0 auto;
     background: var(--dark);
 }
+
+.chat_message {
+    padding: 12px 24px;
+    width: 100%;
+}
